@@ -1,4 +1,3 @@
-
 # ===== Boolean Queries =====
 
 def _doc_sort_key(doc_id):
@@ -29,9 +28,32 @@ def bool_not(index, term):
     return all_docs(index) - get_docs(index, term)
 
 
+
 def boolean_search(index, query):
-   
+
     tokens = query.replace("(", " ( ").replace(")", " ) ").split()
+
+    # Combine consecutive words into phrase tokens
+    processed_tokens = []
+    phrase = []
+
+    for token in tokens:
+
+        if token.upper() in ("AND", "OR", "NOT", "(", ")"):
+
+            if phrase:
+                processed_tokens.append(" ".join(phrase))
+                phrase = []
+
+            processed_tokens.append(token)
+
+        else:
+            phrase.append(token)
+
+    if phrase:
+        processed_tokens.append(" ".join(phrase))
+
+    tokens = processed_tokens
     pos = 0
 
     def peek():
@@ -65,19 +87,86 @@ def boolean_search(index, query):
 
     def parse_atom():
         token = peek()
+
         if token is None:
             raise ValueError("Query ended unexpectedly")
+
         if token == "(":
             take()
             result = parse_or()
+
             if peek() != ")":
                 raise ValueError("Missing closing parenthesis")
+
             take()
             return result
-        return get_docs(index, take())
+
+        token = take()
+
+        if " " in token:
+            return {
+                item["document"]
+                for item in phrase_query(index, token)
+            }
+
+        return get_docs(index, token)
 
     result = parse_or()
+
     if pos != len(tokens):
         raise ValueError(f"Unexpected token: {tokens[pos]}")
 
     return sorted(result, key=_doc_sort_key)
+
+
+
+# ===== Phrase Queries =====
+
+def phrase_query(index, query):
+
+    terms = query.lower().split()
+
+    if not terms:
+        return []
+
+    # Get documents containing all query terms
+    common_docs = set(index.get(terms[0], {}).keys())
+
+    for term in terms[1:]:
+        common_docs &= set(index.get(term, {}).keys())
+
+    result = []
+
+    # Check positions of consecutive terms
+    for doc_id in common_docs:
+
+        first_positions = index[terms[0]][doc_id]
+
+        for position in first_positions:
+
+            match = True
+
+            for i in range(1, len(terms)):
+
+                expected_position = position + i
+
+                if expected_position not in index[terms[i]][doc_id]:
+                    match = False
+                    break
+
+            if match:
+                result.append({
+                    "document": doc_id,
+                    "starting_position": position,
+                    "phrase_token_range": (
+                        f"{position}-{position + len(terms) - 1}"
+                    )
+                })
+
+    return sorted(
+        result,
+        key=lambda item: (
+            _doc_sort_key(item["document"]),
+            item["starting_position"]
+        )
+    )
