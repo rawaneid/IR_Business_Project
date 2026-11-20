@@ -1,6 +1,5 @@
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import query_processing as qp
@@ -16,19 +15,6 @@ BOOLEAN_QUERIES = [
     "customer service AND sales growth",
     "customer service AND NOT sales growth",
 ]
-
-
-class Tee:
-    def __init__(self, *streams):
-        self.streams = streams
-
-    def write(self, data):
-        for s in self.streams:
-            s.write(data)
-
-    def flush(self):
-        for s in self.streams:
-            s.flush()
 
 
 def banner(text):
@@ -89,6 +75,7 @@ def run_phrase(index, idf, doc_vectors, query):
     print_phrase_matches(query, matches)
     docs = {m["document"] for m in matches}
     result = sim.evaluate_query(query, docs, idf, doc_vectors)
+    result["matches"] = group_matches(matches)
     sim.print_similarity_report(f"Similarity for phrase query: \"{query}\"", result)
     return result
 
@@ -98,6 +85,7 @@ def run_boolean(index, idf, doc_vectors, query):
     print(f"\nBoolean query: \"{query}\"")
     print("Matching documents:", ", ".join(docs) if docs else "(none)")
     result = sim.evaluate_query(query, docs, idf, doc_vectors)
+    result["matching_documents"] = list(docs)
     sim.print_similarity_report(f"Similarity for Boolean query: \"{query}\"", result)
     return result
 
@@ -106,14 +94,30 @@ def is_boolean(query):
     return any(tok.upper() in ("AND", "OR", "NOT") for tok in query.split())
 
 
+def group_matches(matches):
+    grouped = {}
+    for m in matches:
+        entry = grouped.setdefault(
+            m["document"], {"document": m["document"], "starting_positions": [], "token_ranges": []})
+        entry["starting_positions"].append(m["starting_position"])
+        entry["token_ranges"].append(m["phrase_token_range"])
+    return list(grouped.values())
+
+
 def to_json_result(result):
-    return {
-        "query": result["query"],
-        "query_length": result["query_length"],
+    out = {"query": result["query"]}
+    if "matches" in result:
+        out["matching_documents"] = [m["document"] for m in result["matches"]]
+        out["matches"] = result["matches"]
+    else:
+        out["matching_documents"] = result["matching_documents"]
+    out["similarity"] = {
+        "query_vector_length": result["query_length"],
         "query_terms": result["query_terms"],
         "scores": result["scores"],
         "ranking": [doc for doc, _ in result["ranking"]],
     }
+    return out
 
 
 def interactive_loop(index, idf, doc_vectors):
@@ -158,17 +162,30 @@ def run_pipeline(skip_spark, interactive):
     doc_vectors = tfidf_mod.get_document_vectors(normalized)
 
     banner("STEP 4: PHRASE QUERIES + SIMILARITY + RANKING")
-    results = {"phrase": [], "boolean": []}
+    phrase_results, boolean_results = [], []
     for query in PHRASE_QUERIES:
-        results["phrase"].append(to_json_result(run_phrase(index, idf, doc_vectors, query)))
+        phrase_results.append(to_json_result(run_phrase(index, idf, doc_vectors, query)))
 
     banner("STEP 5: BOOLEAN QUERIES + SIMILARITY + RANKING")
     for query in BOOLEAN_QUERIES:
-        results["boolean"].append(to_json_result(run_boolean(index, idf, doc_vectors, query)))
+        boolean_results.append(to_json_result(run_boolean(index, idf, doc_vectors, query)))
 
-    with open(OUTPUTS / "query_results.json", "w", encoding="utf-8") as file:
-        json.dump(results, file, indent=4)
-    print("\nQuery results saved to", OUTPUTS / "query_results.json")
+    full_output = {
+        "positional_index": index,
+        "term_frequency": tf,
+        "weighted_tf": w_tf,
+        "document_frequency": df,
+        "idf": idf,
+        "tfidf": tfidf,
+        "document_vector_lengths": lengths,
+        "normalized_tfidf": normalized,
+        "phrase_queries": phrase_results,
+        "boolean_queries": boolean_results,
+    }
+    output_path = OUTPUTS / "full_output.json"
+    with open(output_path, "w", encoding="utf-8") as file:
+        json.dump(full_output, file, indent=4, ensure_ascii=False)
+    print("\nFull output saved to", output_path)
 
     if interactive:
         interactive_loop(index, idf, doc_vectors)
@@ -183,15 +200,7 @@ def main():
     args = parser.parse_args()
 
     OUTPUTS.mkdir(exist_ok=True)
-    log_path = OUTPUTS / "full_output.txt"
-    original_stdout = sys.stdout
-    with open(log_path, "w", encoding="utf-8") as log_file:
-        sys.stdout = Tee(original_stdout, log_file)
-        try:
-            run_pipeline(args.skip_spark, args.interactive)
-        finally:
-            sys.stdout = original_stdout
-    print("Full output saved to", log_path)
+    run_pipeline(args.skip_spark, args.interactive)
 
 
 if __name__ == "__main__":
