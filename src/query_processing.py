@@ -2,8 +2,11 @@
 
 def _doc_sort_key(doc_id):
     number = doc_id[1:]
-    return int(number) if number.isdigit() else doc_id
 
+    if doc_id.startswith("d") and number.isdigit():
+        return (0, int(number))
+
+    return (1, doc_id.lower())
 
 def get_docs(index, term):
     return set(index.get(term.lower(), {}).keys())

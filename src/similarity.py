@@ -3,8 +3,11 @@ import math
 
 def doc_sort_key(doc_id):
     number = doc_id[1:]
-    return int(number) if number.isdigit() else doc_id
 
+    if doc_id.startswith("d") and number.isdigit():
+        return (0, int(number))
+
+    return (1, doc_id.lower())
 
 def extract_query_terms(query, include_negated=False):
     tokens = query.replace("(", " ").replace(")", " ").split()

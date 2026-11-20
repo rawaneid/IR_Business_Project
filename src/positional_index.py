@@ -8,27 +8,42 @@ os.environ["PYSPARK_PYTHON"] = sys.executable
 os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
 
+
 def build_positional_index(spark, dataset_path):
     dataset_path = Path(dataset_path).resolve()
 
+    if not dataset_path.is_dir():
+        raise FileNotFoundError(
+            f"Dataset folder not found: {dataset_path}"
+        )
+
     document_files = sorted(dataset_path.glob("*.txt"))
+
+    if not document_files:
+        raise ValueError(
+            f"No TXT files found in: {dataset_path}"
+        )
 
     document_data = [
         (str(file_path), file_path.read_text(encoding="utf-8"))
         for file_path in document_files
     ]
 
+    empty_documents = [
+        Path(file_path).name
+        for file_path, content in document_data
+        if not content.split()
+    ]
+
+    if empty_documents:
+        raise ValueError(
+            f"Empty documents found: {', '.join(empty_documents)}"
+        )
+
     documents = spark.sparkContext.parallelize(
         document_data,
         2
     ).cache()
-
-    document_count = documents.count()
-
-    if document_count != 10:
-        raise ValueError(
-            f"Expected 10 documents, but found {document_count}"
-        )
 
     def extract_positions(document):
         file_path, content = document
@@ -52,10 +67,10 @@ def build_positional_index(spark, dataset_path):
     def document_sort_key(doc_id):
         number = doc_id[1:]
 
-        if number.isdigit():
-            return int(number)
+        if doc_id.startswith("d") and number.isdigit():
+            return (0, int(number))
 
-        return doc_id
+        return (1, doc_id.lower())
 
     for term, entries in positional_rdd.collect():
 
