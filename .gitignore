@@ -13,3 +13,6 @@ venv/
 # Operating system files
 .DS_Store
 Thumbs.db
+
+# Uploaded datasets
+user_datasets/
