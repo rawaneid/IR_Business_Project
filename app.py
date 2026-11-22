@@ -92,6 +92,21 @@ st.markdown("""
         border-color: rgba(203, 213, 225, 0.25);
     }
 
+    /* Streamlit top header */
+    [data-testid="stHeader"] {
+        background-color: #172554 !important;
+    }
+
+    /* Toolbar */
+    [data-testid="stToolbar"] {
+        background-color: transparent !important;
+    }
+
+    /* Top decoration */
+    [data-testid="stDecoration"] {
+        background-color: #172554 !important;
+    }
+
     /* Main headings and text */
     h1, h2, h3, h4 {
         color: var(--navy);
