@@ -92,19 +92,19 @@ st.markdown("""
         border-color: rgba(203, 213, 225, 0.25);
     }
 
-    /* Streamlit top header */
+    /* Top header - same as main page background */
     [data-testid="stHeader"] {
-        background-color: #172554 !important;
+        background-color: #F8FAFC !important;
+    }
+
+    /* Top decoration */
+    [data-testid="stDecoration"] {
+        background-color: #F8FAFC !important;
     }
 
     /* Toolbar */
     [data-testid="stToolbar"] {
         background-color: transparent !important;
-    }
-
-    /* Top decoration */
-    [data-testid="stDecoration"] {
-        background-color: #172554 !important;
     }
 
     /* Main headings and text */
