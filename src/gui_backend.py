@@ -1,6 +1,12 @@
 import json
 from pathlib import Path
 import sys
+import os
+
+# Use the same Python interpreter for Spark Driver and Workers
+os.environ["PYSPARK_PYTHON"] = sys.executable
+os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
+
 import query_processing as qp
 import similarity as sim
 import tfidf as tfidf_mod
@@ -9,6 +15,7 @@ import tfidf as tfidf_mod
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUTS = ROOT / "outputs"
 DEFAULT_DATASET = ROOT / "dataset"
+
 sys.path.insert(0, str(ROOT / "src"))
 
 
@@ -61,7 +68,7 @@ def search_dataset(data, query, query_type):
         matching_docs = sorted(
             {match["document"] for match in matches},
             key=sim.doc_sort_key
-        )   
+        )
 
     elif query_type == "Boolean Query":
         matching_docs = qp.boolean_search(index, query)
@@ -86,7 +93,6 @@ def search_dataset(data, query, query_type):
     }
 
 
-
 def build_dataset(dataset_path, output_dir=None):
     from pyspark.sql import SparkSession
     import positional_index as pi
@@ -107,19 +113,23 @@ def build_dataset(dataset_path, output_dir=None):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Create Spark Session
     spark = (
         SparkSession.builder
         .master("local[2]")
         .appName("IR_Streamlit_Index_Builder")
+        .config("spark.driver.host", "127.0.0.1")
+        .config("spark.driver.bindAddress", "127.0.0.1")
         .getOrCreate()
     )
 
     spark.sparkContext.setLogLevel("ERROR")
 
     try:
-        # 1. Build Positional Index
+        # 1. Build Positional Index using PySpark
         index = pi.build_positional_index(
-            spark, dataset_path
+            spark,
+            dataset_path
         )
 
     finally:

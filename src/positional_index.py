@@ -1,4 +1,5 @@
 from pyspark.sql import SparkSession
+from urllib.parse import unquote
 from pathlib import Path
 import json
 import os
@@ -6,7 +7,6 @@ import sys
 
 os.environ["PYSPARK_PYTHON"] = sys.executable
 os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
-
 
 
 def build_positional_index(spark, dataset_path):
@@ -17,81 +17,96 @@ def build_positional_index(spark, dataset_path):
             f"Dataset folder not found: {dataset_path}"
         )
 
-    document_files = sorted(dataset_path.glob("*.txt"))
-
-    if not document_files:
-        raise ValueError(
-            f"No TXT files found in: {dataset_path}"
-        )
-
-    document_data = [
-        (str(file_path), file_path.read_text(encoding="utf-8"))
-        for file_path in document_files
-    ]
-
-    empty_documents = [
-        Path(file_path).name
-        for file_path, content in document_data
-        if not content.split()
-    ]
-
-    if empty_documents:
-        raise ValueError(
-            f"Empty documents found: {', '.join(empty_documents)}"
-        )
-
-    documents = spark.sparkContext.parallelize(
-        document_data,
-        2
-    ).cache()
-
-    def extract_positions(document):
-        file_path, content = document
-
-        doc_id = Path(file_path).stem
-        words = content.lower().split()
-
-        return [
-            (word, (doc_id, position))
-            for position, word in enumerate(words, start=1)
-        ]
-
-    positional_rdd = (
-        documents
-        .flatMap(extract_positions)
-        .groupByKey()
+    # 1. Dataset Import using PySpark
+    file_pattern = unquote(
+        dataset_path.as_uri().rstrip("/") + "/*.txt"
     )
 
-    positional_index = {}
+    documents = (
+        spark.sparkContext
+        .wholeTextFiles(file_pattern, minPartitions=2)
+        .cache()
+    )
 
-    def document_sort_key(doc_id):
-        number = doc_id[1:]
-
-        if doc_id.startswith("d") and number.isdigit():
-            return (0, int(number))
-
-        return (1, doc_id.lower())
-
-    for term, entries in positional_rdd.collect():
-
-        sorted_entries = sorted(
-            entries,
-            key=lambda item: (
-                document_sort_key(item[0]),
-                item[1]
+    try:
+        if not documents.take(1):
+            raise ValueError(
+                f"No TXT files found in: {dataset_path}"
             )
+
+        # 2. Validate documents using PySpark
+        empty_documents = (
+            documents
+            .filter(lambda item: not item[1].split())
+            .map(
+                lambda item: Path(
+                    item[0].rsplit("/", 1)[-1]
+                ).name
+            )
+            .collect()
         )
 
-        positional_index[term] = {}
+        if empty_documents:
+            raise ValueError(
+                f"Empty documents found: {', '.join(empty_documents)}"
+            )
 
-        for doc_id, position in sorted_entries:
-            positional_index[term].setdefault(
-                doc_id, []
-            ).append(position)
+        # 3. Document Processing using PySpark
+        def extract_positions(document):
 
-    documents.unpersist()
+            file_path, content = document
 
-    return dict(sorted(positional_index.items()))
+            doc_id = Path(
+                file_path.rsplit("/", 1)[-1]
+            ).stem
+
+            words = content.lower().split()
+
+            return [
+                (word, (doc_id, position))
+                for position, word in enumerate(words, start=1)
+            ]
+
+        positional_rdd = (
+            documents
+            .flatMap(extract_positions)
+            .groupByKey()
+        )
+
+        # 4. Build Positional Index using PySpark
+        positional_index = {}
+
+        def document_sort_key(doc_id):
+
+            number = doc_id[1:]
+
+            if doc_id.startswith("d") and number.isdigit():
+                return (0, int(number))
+
+            return (1, doc_id.lower())
+
+        for term, entries in positional_rdd.collect():
+
+            sorted_entries = sorted(
+                entries,
+                key=lambda item: (
+                    document_sort_key(item[0]),
+                    item[1]
+                )
+            )
+
+            positional_index[term] = {}
+
+            for doc_id, position in sorted_entries:
+
+                positional_index[term].setdefault(
+                    doc_id, []
+                ).append(position)
+
+        return dict(sorted(positional_index.items()))
+
+    finally:
+        documents.unpersist()
 
 
 def save_positional_index(positional_index, output_path):

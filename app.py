@@ -259,6 +259,8 @@ defaults = {
     "index_ready": False,
     "dataset_name": "dataset",
     "active_source": "Default dataset",
+    "selected_source": "Default dataset",
+    "active_dataset_path": str(ROOT / "dataset"),
     "pending_dataset_path": None,
     "pending_dataset_name": None,
     "upload_signature": None,
@@ -280,6 +282,7 @@ if st.session_state.dataset_data is None:
 
     st.session_state.index_ready = True
     st.session_state.dataset_name = "dataset"
+    st.session_state.active_dataset_path = str(ROOT / "dataset")
 
 
 # =========================================================
@@ -293,6 +296,8 @@ def clear_search():
     if "search_query" in st.session_state:
         st.session_state.search_query = ""
 
+def update_selected_source():
+    st.session_state.selected_source = st.session_state.dataset_source_widget
 
 def get_documents(data):
 
@@ -305,6 +310,36 @@ def get_documents(data):
         else (1, doc.lower())
     )
 
+def get_document_contents(dataset_path, document_ids):
+
+    dataset_path = Path(dataset_path)
+    document_files = {}
+
+    for file_path in dataset_path.rglob("*"):
+        if file_path.is_file() and file_path.suffix.lower() == ".txt":
+            document_files[file_path.stem] = file_path
+
+    rows = []
+
+    for doc_id in document_ids:
+
+        file_path = document_files.get(doc_id)
+
+        if file_path is None:
+            content = "Document content unavailable."
+
+        else:
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                content = "Could not read document content."
+
+        rows.append({
+            "Document": doc_id,
+            "Document Content": content
+        })
+
+    return rows
 
 def get_total_tokens(index):
 
@@ -458,18 +493,43 @@ def save_uploaded_dataset(uploaded_files):
     return str(temp_dir)
 
 
+
 def display_search_results(result):
 
     similarity = result["similarity"]
-
     ranking = similarity["ranking"]
 
-    st.markdown("### 📄 Search Results")
-
     if not ranking:
-
+        st.markdown("### 📄 Matching Documents")
         st.info("No matching documents were found.")
         return
+
+    # 1. Matching Documents Content
+
+    st.markdown("### 📄 Matching Documents")
+
+    matching_document_ids = [
+        doc for doc, score in ranking
+    ]
+
+    documents_content = get_document_contents(
+        st.session_state.active_dataset_path,
+        matching_document_ids
+    )
+
+    for document in documents_content:
+
+        with st.expander(
+            f"📄 {document['Document']}"
+        ):
+
+            st.write(
+                document["Document Content"]
+            )
+
+    # 2. Search Results (Ranking)
+
+    st.markdown("### 🔍 Search Results")
 
     phrase_matches = {}
 
@@ -515,6 +575,8 @@ def display_search_results(result):
         "sorted by Similarity Score."
     )
 
+    # 3. Query Vector Details
+
     with st.expander("View Query Vector Details"):
 
         st.write(
@@ -527,6 +589,7 @@ def display_search_results(result):
             use_container_width=True,
             hide_index=True
         )
+
 
 
 # =========================================================
@@ -574,13 +637,10 @@ if page == "IR Workspace":
 
     source = st.segmented_control(
         "Dataset Source",
-        [
-            "Default dataset",
-            "Upload new dataset"
-        ],
-        default="Default dataset",
-        key="dataset_source",
-        width="content"
+        ["Default dataset", "Upload new dataset"],
+        default=st.session_state.selected_source,
+        key="dataset_source_widget",
+        on_change=update_selected_source
     )
 
     if source != st.session_state.active_source:
@@ -596,6 +656,7 @@ if page == "IR Workspace":
             )
 
             st.session_state.dataset_name = "dataset"
+            st.session_state.active_dataset_path = str(ROOT / "dataset")
             st.session_state.index_ready = True
 
             st.session_state.pending_dataset_path = None
@@ -603,8 +664,6 @@ if page == "IR Workspace":
             st.session_state.upload_signature = None
 
         else:
-
-            st.session_state.index_ready = False
 
             st.session_state.pending_dataset_path = None
             st.session_state.pending_dataset_name = None
@@ -680,6 +739,13 @@ if page == "IR Workspace":
 
         if st.session_state.pending_dataset_path:
 
+            if st.session_state.active_source == "Default dataset":
+                current_dataset_label = "Business dataset"
+            else:
+                current_dataset_label = "New uploaded"
+
+            st.info(f"**Current Dataset:** {current_dataset_label}")
+
             if st.button(
                 "⚙️ Build Index",
                 type="primary",
@@ -716,6 +782,8 @@ if page == "IR Workspace":
 
                     st.session_state.index_ready = True
 
+                    st.session_state.active_dataset_path = str(dataset_path.resolve())
+
                     clear_search()
 
                     st.success(
@@ -725,8 +793,6 @@ if page == "IR Workspace":
                     st.rerun()
 
                 except Exception as error:
-
-                    st.session_state.index_ready = False
 
                     st.error(
                         f"Could not build the index: {error}"
@@ -908,15 +974,15 @@ elif page == "Dashboard":
 
             for term, postings in data["positional_index"].items():
 
-                for doc, positions in postings.items():
+                posting_list = "\n".join(
+                    f"{doc}: [{', '.join(map(str, positions))}]"
+                    for doc, positions in postings.items()
+                )
 
-                    positional_rows.append({
-                        "Term": term,
-                        "Document": doc,
-                        "Positions": ", ".join(
-                            map(str, positions)
-                        )
-                    })
+                positional_rows.append({
+                    "Term": term,
+                    "Posting List (Document: Positions)": posting_list
+                })
 
             st.dataframe(
                 pd.DataFrame(positional_rows),
